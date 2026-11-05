@@ -1214,6 +1214,21 @@
 
     renderSaMonitor(pending);
 
+    // Jangan bangun ulang DOM daftar kartu PKB kalau SA sedang AKTIF MENGETIK di field teks bebas
+    // (catatan hasil telepon / nomor HP baru) — mengganti innerHTML di tengah sesi ketik akan menghapus
+    // teks yang belum sempat disimpan (textarea-nya ikut terganti total, bukan cuma nilainya). Dropdown
+    // status & radio "sudah/belum" TIDAK termasuk yang dijaga di sini — keduanya langsung ter-commit saat
+    // diklik (tidak ada draft yang bisa hilang), jadi tetap boleh langsung ter-refresh begitu tersimpan,
+    // supaya badge "Menunggu"/"Sudah Ditindaklanjuti" ikut berubah seketika. Pill/banner/monitor di atas
+    // juga tetap di-refresh seperti biasa karena semuanya read-only. Begitu SA pindah fokus dari field teks
+    // (blur, yang otomatis memicu simpan), refresh berikutnya langsung menampilkan data terbaru lagi.
+    var activeEl = document.activeElement;
+    var isTypingField = activeEl && container.contains(activeEl) &&
+      (activeEl.tagName === 'TEXTAREA' || (activeEl.tagName === 'INPUT' && activeEl.type === 'text'));
+    if (isTypingField){
+      return;
+    }
+
     BELUM_RESPON_REC_MAP = {};
     if (!pending.length){
       container.innerHTML = '<div class="empty-note">Tidak ada PKB berstatus Belum Direspon pada rentang tanggal ini.</div>';
