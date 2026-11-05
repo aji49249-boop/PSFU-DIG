@@ -67,6 +67,7 @@
   button{cursor:pointer; font-weight:600;}
   button.primary{background:var(--accent-grad); color:#fff; border:none; box-shadow:0 3px 12px color-mix(in srgb, var(--accent-1) 35%, transparent);}
   button:hover{filter:brightness(0.97);}
+  button:disabled{opacity:.55; cursor:not-allowed; filter:none;}
   .status-line{font-size:12px; color:var(--text-muted); display:flex; align-items:center; gap:6px;}
   .dot{width:7px;height:7px;border-radius:50%;background:var(--good); display:inline-block; box-shadow:0 0 0 3px color-mix(in srgb, var(--good) 25%, transparent);}
   .banner{
@@ -266,7 +267,8 @@
   }
   .br-radio-group{display:flex; gap:12px; font-size:12.5px; color:var(--text-primary); align-items:center; padding-top:4px;}
   .br-radio-group label{display:flex; align-items:center; gap:4px; cursor:pointer; font-weight:400;}
-  .br-row-foot{display:flex; justify-content:flex-end; gap:10px; margin-top:8px; font-size:11px; color:var(--text-muted); min-height:14px;}
+  .br-row-foot{display:flex; justify-content:flex-end; align-items:center; gap:10px; margin-top:8px; font-size:11px; color:var(--text-muted); min-height:14px;}
+  .br-save-btn{font-size:12.5px; padding:6px 16px;}
   .br-saved{color:var(--good-text);}
   .br-save-status{font-style:italic;}
 
@@ -1099,12 +1101,16 @@
           '</span>'+
         '</label>'+
       '</div>'+
-      '<div class="br-row-foot">'+savedNote+'<span class="br-save-status"></span></div>'+
+      '<div class="br-row-foot">'+savedNote+'<button type="button" class="br-save-btn primary">Simpan</button><span class="br-save-status"></span></div>'+
     '</div>';
   }
 
+  // Disimpan HANYA saat tombol "Simpan" diklik (bukan otomatis saat field berubah/blur) — supaya SA
+  // tahu pasti kapan datanya terkirim, dan supaya jelas kalau ada kegagalan (pesan error tampil di
+  // sebelah tombol beserta tombol "coba lagi"), bukan diam-diam gagal tanpa SA sadar.
   function saveOverride(key, rowEl){
     var sEl = rowEl.querySelector('.br-save-status');
+    var btnEl = rowEl.querySelector('.br-save-btn');
     if (!apiReady){
       if (sEl) sEl.textContent = 'Tidak tersimpan — URL Apps Script belum di-setup (lihat banner di atas)';
       return;
@@ -1128,6 +1134,7 @@
       phoneUpdated: phoneUpdatedEl ? phoneUpdatedEl.value : 'belum',
       updatedAt: new Date().toISOString()
     };
+    if (btnEl) btnEl.disabled = true;
     if (sEl) sEl.textContent = 'Menyimpan…';
     // text/plain avoids a CORS preflight (OPTIONS) request, which an Apps Script Web App cannot answer —
     // see the project notes / Apps Script source comments for why this content-type is required here.
@@ -1138,12 +1145,14 @@
     }).then(function(r){ return r.json(); }).then(function(json){
       if (!json || !json.ok) throw new Error((json && json.error) || 'unknown error');
       if (sEl) sEl.textContent = 'Tersimpan ✓';
-      setTimeout(function(){ if (sEl) sEl.textContent = ''; }, 3000);
+      if (btnEl) btnEl.disabled = false;
+      setTimeout(function(){ if (sEl) sEl.textContent = ''; }, 4000);
       DB_OVERRIDES[key] = body; // reflect immediately on this screen; pollOverrides() reconciles with the server shortly after
       renderAll();
       pollOverrides();
     }).catch(function(e){
-      if (sEl) sEl.textContent = 'Gagal menyimpan (' + (e && e.message ? e.message : 'jaringan') + ')';
+      if (sEl) sEl.textContent = 'Gagal menyimpan (' + (e && e.message ? e.message : 'jaringan') + ') — coba lagi';
+      if (btnEl) btnEl.disabled = false;
     });
   }
 
@@ -1152,12 +1161,7 @@
     for (var i=0;i<rows.length;i++){
       (function(rowEl){
         var key = rowEl.getAttribute('data-key');
-        function saveRow(){ saveOverride(key, rowEl); }
-        rowEl.querySelector('.br-status').addEventListener('change', saveRow);
-        rowEl.querySelector('.br-note').addEventListener('blur', saveRow);
-        rowEl.querySelector('.br-phone').addEventListener('blur', saveRow);
-        var radios = rowEl.querySelectorAll('.br-phone-updated');
-        for (var j=0;j<radios.length;j++){ radios[j].addEventListener('change', saveRow); }
+        rowEl.querySelector('.br-save-btn').addEventListener('click', function(){ saveOverride(key, rowEl); });
       })(rows[i]);
     }
   }
@@ -1214,18 +1218,19 @@
 
     renderSaMonitor(pending);
 
-    // Jangan bangun ulang DOM daftar kartu PKB kalau SA sedang AKTIF MENGETIK di field teks bebas
-    // (catatan hasil telepon / nomor HP baru) — mengganti innerHTML di tengah sesi ketik akan menghapus
-    // teks yang belum sempat disimpan (textarea-nya ikut terganti total, bukan cuma nilainya). Dropdown
-    // status & radio "sudah/belum" TIDAK termasuk yang dijaga di sini — keduanya langsung ter-commit saat
-    // diklik (tidak ada draft yang bisa hilang), jadi tetap boleh langsung ter-refresh begitu tersimpan,
-    // supaya badge "Menunggu"/"Sudah Ditindaklanjuti" ikut berubah seketika. Pill/banner/monitor di atas
-    // juga tetap di-refresh seperti biasa karena semuanya read-only. Begitu SA pindah fokus dari field teks
-    // (blur, yang otomatis memicu simpan), refresh berikutnya langsung menampilkan data terbaru lagi.
+    // Jangan bangun ulang DOM daftar kartu PKB kalau SA sedang menyentuh salah satu field edit-nya
+    // (status, catatan, nomor HP, radio sudah/belum) — karena simpan sekarang HANYA terjadi lewat
+    // klik tombol "Simpan" (bukan otomatis saat field berubah), perubahan yang belum diklik "Simpan"
+    // adalah draft yang belum tersimpan di manapun. Mengganti innerHTML di tengah draft akan membangun
+    // ulang field itu dari data TERSIMPAN TERAKHIR (bukan dari draft), jadi pilihan/ketikan yang belum
+    // disimpan akan hilang/reset kalau tidak dijaga. Tombol "Simpan" sendiri TIDAK ikut tag form field
+    // di bawah ini, jadi begitu diklik, refresh berikutnya (dipicu sendiri oleh saveOverride setelah
+    // sukses) tetap berjalan normal. Pill/banner/monitor di atas tetap di-refresh karena semuanya read-only.
     var activeEl = document.activeElement;
-    var isTypingField = activeEl && container.contains(activeEl) &&
-      (activeEl.tagName === 'TEXTAREA' || (activeEl.tagName === 'INPUT' && activeEl.type === 'text'));
-    if (isTypingField){
+    var isEditingField = activeEl && container.contains(activeEl) &&
+      (activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT' ||
+       (activeEl.tagName === 'INPUT' && (activeEl.type === 'text' || activeEl.type === 'radio')));
+    if (isEditingField){
       return;
     }
 
