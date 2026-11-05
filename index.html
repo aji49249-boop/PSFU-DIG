@@ -1111,49 +1111,68 @@
   function saveOverride(key, rowEl){
     var sEl = rowEl.querySelector('.br-save-status');
     var btnEl = rowEl.querySelector('.br-save-btn');
-    if (!apiReady){
-      if (sEl) sEl.textContent = 'Tidak tersimpan — URL Apps Script belum di-setup (lihat banner di atas)';
-      return;
+    // Seluruh bagian SINKRON di bawah ini dibungkus try/catch dengan sengaja: kalau ada error tak
+    // terduga (mis. elemen field tidak ketemu) yang terjadi SEBELUM request terkirim, tanpa try/catch
+    // ini error itu cuma muncul diam-diam di Console browser dan SA akan lihat tombol "Simpan" seolah
+    // tidak merespon sama sekali (tidak ada pesan "Menyimpan…" ataupun pesan gagal). Dengan try/catch,
+    // apapun yang salah tetap akan menampilkan pesan error di layar.
+    try {
+      if (!apiReady){
+        if (sEl) sEl.textContent = 'Tidak tersimpan — URL Apps Script belum di-setup (lihat banner di atas)';
+        return;
+      }
+      var rec = BELUM_RESPON_REC_MAP[key];
+      if (!rec){
+        // Ini seharusnya jarang terjadi — kalau sampai ke sini, kartu yang diklik sudah tidak cocok lagi
+        // dengan data yang sedang dimuat (mis. rentang tanggal/filter SA berubah tepat sebelum tombol
+        // diklik). Tampilkan ini SELALU, jangan diam-diam return, supaya SA tahu harus refresh dulu
+        // alih-alih mengira tombolnya rusak.
+        if (sEl) sEl.textContent = 'Gagal menyimpan — data kartu ini sudah tidak sinkron, coba refresh halaman lalu ulangi';
+        return;
+      }
+      var statusEl = rowEl.querySelector('.br-status');
+      var noteEl = rowEl.querySelector('.br-note');
+      var phoneEl = rowEl.querySelector('.br-phone');
+      var phoneUpdatedEl = rowEl.querySelector('.br-phone-updated:checked');
+      var body = {
+        key: key,
+        month: monthKey(),
+        day: rec.day,
+        no: fmtNo(rec.no),
+        plate: rec.plate,
+        sa: rec.sa,
+        status: statusEl.value,
+        note: norm(noteEl.value),
+        newPhone: norm(phoneEl.value),
+        phoneUpdated: phoneUpdatedEl ? phoneUpdatedEl.value : 'belum',
+        updatedAt: new Date().toISOString()
+      };
+      if (btnEl) btnEl.disabled = true;
+      if (sEl) sEl.textContent = 'Menyimpan…';
+      // text/plain avoids a CORS preflight (OPTIONS) request, which an Apps Script Web App cannot answer —
+      // see the project notes / Apps Script source comments for why this content-type is required here.
+      fetch(OVERRIDES_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(body)
+      }).then(function(r){ return r.json(); }).then(function(json){
+        if (!json || !json.ok) throw new Error((json && json.error) || 'unknown error');
+        if (sEl) sEl.textContent = 'Tersimpan ✓';
+        if (btnEl) btnEl.disabled = false;
+        setTimeout(function(){ if (sEl) sEl.textContent = ''; }, 4000);
+        DB_OVERRIDES[key] = body; // reflect immediately on this screen; pollOverrides() reconciles with the server shortly after
+        renderAll();
+        pollOverrides();
+      }).catch(function(e){
+        console.error('[PSFU] Gagal menyimpan override (jaringan/server):', e);
+        if (sEl) sEl.textContent = 'Gagal menyimpan (' + (e && e.message ? e.message : 'jaringan') + ') — coba lagi';
+        if (btnEl) btnEl.disabled = false;
+      });
+    } catch (err){
+      console.error('[PSFU] Error tak terduga saat menyimpan:', err);
+      if (sEl) sEl.textContent = 'Gagal menyimpan (error: ' + (err && err.message ? err.message : 'tidak diketahui') + ')';
+      if (btnEl) btnEl.disabled = false;
     }
-    var rec = BELUM_RESPON_REC_MAP[key];
-    if (!rec) return;
-    var statusEl = rowEl.querySelector('.br-status');
-    var noteEl = rowEl.querySelector('.br-note');
-    var phoneEl = rowEl.querySelector('.br-phone');
-    var phoneUpdatedEl = rowEl.querySelector('.br-phone-updated:checked');
-    var body = {
-      key: key,
-      month: monthKey(),
-      day: rec.day,
-      no: fmtNo(rec.no),
-      plate: rec.plate,
-      sa: rec.sa,
-      status: statusEl.value,
-      note: norm(noteEl.value),
-      newPhone: norm(phoneEl.value),
-      phoneUpdated: phoneUpdatedEl ? phoneUpdatedEl.value : 'belum',
-      updatedAt: new Date().toISOString()
-    };
-    if (btnEl) btnEl.disabled = true;
-    if (sEl) sEl.textContent = 'Menyimpan…';
-    // text/plain avoids a CORS preflight (OPTIONS) request, which an Apps Script Web App cannot answer —
-    // see the project notes / Apps Script source comments for why this content-type is required here.
-    fetch(OVERRIDES_API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(body)
-    }).then(function(r){ return r.json(); }).then(function(json){
-      if (!json || !json.ok) throw new Error((json && json.error) || 'unknown error');
-      if (sEl) sEl.textContent = 'Tersimpan ✓';
-      if (btnEl) btnEl.disabled = false;
-      setTimeout(function(){ if (sEl) sEl.textContent = ''; }, 4000);
-      DB_OVERRIDES[key] = body; // reflect immediately on this screen; pollOverrides() reconciles with the server shortly after
-      renderAll();
-      pollOverrides();
-    }).catch(function(e){
-      if (sEl) sEl.textContent = 'Gagal menyimpan (' + (e && e.message ? e.message : 'jaringan') + ') — coba lagi';
-      if (btnEl) btnEl.disabled = false;
-    });
   }
 
   function wireBelumResponEvents(container){
