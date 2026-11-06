@@ -1038,7 +1038,12 @@
       (json.records || []).forEach(function(rec){ if (rec.key) next[rec.key] = rec; });
       DB_OVERRIDES = next;
       renderAll();
-    }).catch(function(){ /* transient network hiccup — next poll tick retries on its own */ });
+    }).catch(function(e){
+      // Biasanya cuma gangguan jaringan sesaat (poll berikutnya otomatis coba lagi), TAPI kalau ada
+      // error tak terduga lain yang tersembunyi di sini (mis. dari renderAll()), tetap dicatat ke
+      // Console supaya tidak hilang diam-diam kalau suatu saat perlu ditelusuri.
+      console.error('[PSFU] pollOverrides gagal (biasanya transient, abaikan kalau cuma sesekali):', e);
+    });
   }
 
   function initOverridesApi(){
@@ -1178,10 +1183,24 @@
   function wireBelumResponEvents(container){
     var rows = container.querySelectorAll('.br-row');
     for (var i=0;i<rows.length;i++){
-      (function(rowEl){
-        var key = rowEl.getAttribute('data-key');
-        rowEl.querySelector('.br-save-btn').addEventListener('click', function(){ saveOverride(key, rowEl); });
-      })(rows[i]);
+      // try/catch PER BARIS (bukan di luar loop) dengan sengaja: kalau satu baris saja gagal di-wire
+      // (mis. tombol "Simpan"-nya entah kenapa tidak ketemu di baris itu), baris-baris LAIN tetap
+      // harus tetap dapat listener-nya — tanpa try/catch di sini, satu exception di satu baris akan
+      // menghentikan SELURUH loop for di tengah jalan, sehingga semua baris SETELAHNYA (yang
+      // sebenarnya baik-baik saja) ikut kehilangan tombol "Simpan" yang berfungsi.
+      try {
+        (function(rowEl){
+          var key = rowEl.getAttribute('data-key');
+          var btn = rowEl.querySelector('.br-save-btn');
+          if (!btn){
+            console.error('[PSFU] Tombol Simpan tidak ditemukan di satu baris PKB (key: ' + key + ') — baris ini tidak akan bisa disimpan.');
+            return;
+          }
+          btn.addEventListener('click', function(){ saveOverride(key, rowEl); });
+        })(rows[i]);
+      } catch (err){
+        console.error('[PSFU] Gagal memasang tombol Simpan untuk satu baris PKB:', err);
+      }
     }
   }
 
@@ -1222,78 +1241,93 @@
 
   function renderBelumResponTab(){
     var container = document.getElementById('belumResponGroups');
-    var pending = RANGE_RECORDS.filter(function(r){ return r.rawStatus === 'Belum Direspon'; });
-    var stillPending = pending.filter(function(r){ return !isHandled(r); }).length;
-    document.getElementById('belumResponCountPill').textContent =
-      stillPending + ' dari ' + pending.length + ' PKB masih perlu ditindaklanjuti';
+    // Seluruh isi fungsi ini dibungkus try/catch dengan sengaja: kalau ada error tak terduga di
+    // tengah proses membangun daftar kartu PKB (mis. data sheet punya bentuk yang tidak terduga),
+    // TANPA try/catch ini error itu akan berhenti diam-diam SEBELUM sempat sampai ke
+    // wireBelumResponEvents(container) di baris paling akhir — artinya tombol "Simpan" di SEMUA
+    // kartu tidak akan pernah ter-pasang event listener-nya sama sekali, dan SA akan melihat tombol
+    // "Simpan" yang terlihat normal tapi klik-nya tidak merespon apa-apa (persis gejala yang
+    // dilaporkan). Dengan try/catch ini, kejadian seperti itu akan selalu tampil sebagai pesan error
+    // yang jelas di layar + log detail di Console, bukan diam-diam membuat seluruh tab tidak berfungsi.
+    try {
+      var pending = RANGE_RECORDS.filter(function(r){ return r.rawStatus === 'Belum Direspon'; });
+      var stillPending = pending.filter(function(r){ return !isHandled(r); }).length;
+      document.getElementById('belumResponCountPill').textContent =
+        stillPending + ' dari ' + pending.length + ' PKB masih perlu ditindaklanjuti';
 
-    var dbBanner = document.getElementById('belumResponDbBanner');
-    if (!apiReady){
-      dbBanner.style.display = 'block';
-      dbBanner.textContent = 'Fitur edit & sinkron di tab ini belum di-setup: isi OVERRIDES_API_URL di bagian atas kode dengan URL Apps Script Web App Anda (lihat panduan setup). Daftar di bawah tetap tampil tapi belum bisa disimpan.';
-    } else {
-      dbBanner.style.display = 'none';
+      var dbBanner = document.getElementById('belumResponDbBanner');
+      if (!apiReady){
+        dbBanner.style.display = 'block';
+        dbBanner.textContent = 'Fitur edit & sinkron di tab ini belum di-setup: isi OVERRIDES_API_URL di bagian atas kode dengan URL Apps Script Web App Anda (lihat panduan setup). Daftar di bawah tetap tampil tapi belum bisa disimpan.';
+      } else {
+        dbBanner.style.display = 'none';
+      }
+
+      renderSaMonitor(pending);
+
+      // Jangan bangun ulang DOM daftar kartu PKB kalau SA sedang menyentuh salah satu field edit-nya
+      // (status, catatan, nomor HP, radio sudah/belum) — karena simpan sekarang HANYA terjadi lewat
+      // klik tombol "Simpan" (bukan otomatis saat field berubah), perubahan yang belum diklik "Simpan"
+      // adalah draft yang belum tersimpan di manapun. Mengganti innerHTML di tengah draft akan membangun
+      // ulang field itu dari data TERSIMPAN TERAKHIR (bukan dari draft), jadi pilihan/ketikan yang belum
+      // disimpan akan hilang/reset kalau tidak dijaga. Tombol "Simpan" sendiri TIDAK ikut tag form field
+      // di bawah ini, jadi begitu diklik, refresh berikutnya (dipicu sendiri oleh saveOverride setelah
+      // sukses) tetap berjalan normal. Pill/banner/monitor di atas tetap di-refresh karena semuanya read-only.
+      var activeEl = document.activeElement;
+      var isEditingField = activeEl && container.contains(activeEl) &&
+        (activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT' ||
+         (activeEl.tagName === 'INPUT' && (activeEl.type === 'text' || activeEl.type === 'radio')));
+      if (isEditingField){
+        return;
+      }
+
+      BELUM_RESPON_REC_MAP = {};
+      if (!pending.length){
+        container.innerHTML = '<div class="empty-note">Tidak ada PKB berstatus Belum Direspon pada rentang tanggal ini.</div>';
+        document.getElementById('filterSaBelumRespon').innerHTML = '<option value="">Semua SA</option>';
+        return;
+      }
+
+      var g = groupBySA(pending);
+
+      // Dropdown filter SA — opsinya selalu mengikuti daftar SA yang ada di rentang tanggal terpilih saat ini.
+      // Kalau SA yang sedang dipilih sudah tidak ada lagi di rentang baru (mis. ganti bulan), filter direset ke "Semua SA".
+      var saFilterEl = document.getElementById('filterSaBelumRespon');
+      var prevSaFilter = saFilterEl.value;
+      var saOpts = '<option value="">Semua SA</option>' + g.order.map(function(saName){
+        return '<option value="'+esc(saName)+'">'+esc(saName)+' ('+g.map[saName].length+')</option>';
+      }).join('');
+      saFilterEl.innerHTML = saOpts;
+      saFilterEl.value = (g.order.indexOf(prevSaFilter) !== -1) ? prevSaFilter : '';
+      var saFilter = saFilterEl.value;
+
+      var groupNames = saFilter ? [saFilter] : g.order;
+      if (!groupNames.length){
+        container.innerHTML = '<div class="empty-note">Tidak ada PKB untuk SA ini pada rentang tanggal terpilih.</div>';
+        return;
+      }
+      var html = groupNames.map(function(saName){
+        // Belum ditindaklanjuti dulu, baru yang sudah — supaya pekerjaan yang masih tersisa selalu di atas.
+        var recs = g.map[saName].slice().sort(function(x,y){
+          var xH = isHandled(x), yH = isHandled(y);
+          if (xH !== yH) return xH ? 1 : -1;
+          return y.day - x.day;
+        });
+        var remaining = recs.filter(function(r){ return !isHandled(r); }).length;
+        var rows = recs.map(renderBelumResponRow).join('');
+        return '<div class="sa-group-card">'+
+          '<div class="sa-group-head"><span class="sa-group-name">'+esc(saName)+'</span><span class="sa-group-count">'+remaining+' dari '+recs.length+' PKB belum ditindaklanjuti</span></div>'+
+          '<div class="sa-group-rows">'+rows+'</div>'+
+        '</div>';
+      }).join('');
+      container.innerHTML = html;
+      wireBelumResponEvents(container);
+    } catch (err){
+      console.error('[PSFU] Error tak terduga saat menampilkan daftar Belum Direspon:', err);
+      if (container){
+        container.innerHTML = '<div class="empty-note" style="color:var(--critical);">Terjadi error saat menampilkan daftar ini — tombol "Simpan" mungkin tidak akan merespon. Buka Console browser (F12 → tab Console) untuk detail errornya, lalu laporkan pesan errornya. (' + esc(err && err.message ? err.message : String(err)) + ')</div>';
+      }
     }
-
-    renderSaMonitor(pending);
-
-    // Jangan bangun ulang DOM daftar kartu PKB kalau SA sedang menyentuh salah satu field edit-nya
-    // (status, catatan, nomor HP, radio sudah/belum) — karena simpan sekarang HANYA terjadi lewat
-    // klik tombol "Simpan" (bukan otomatis saat field berubah), perubahan yang belum diklik "Simpan"
-    // adalah draft yang belum tersimpan di manapun. Mengganti innerHTML di tengah draft akan membangun
-    // ulang field itu dari data TERSIMPAN TERAKHIR (bukan dari draft), jadi pilihan/ketikan yang belum
-    // disimpan akan hilang/reset kalau tidak dijaga. Tombol "Simpan" sendiri TIDAK ikut tag form field
-    // di bawah ini, jadi begitu diklik, refresh berikutnya (dipicu sendiri oleh saveOverride setelah
-    // sukses) tetap berjalan normal. Pill/banner/monitor di atas tetap di-refresh karena semuanya read-only.
-    var activeEl = document.activeElement;
-    var isEditingField = activeEl && container.contains(activeEl) &&
-      (activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT' ||
-       (activeEl.tagName === 'INPUT' && (activeEl.type === 'text' || activeEl.type === 'radio')));
-    if (isEditingField){
-      return;
-    }
-
-    BELUM_RESPON_REC_MAP = {};
-    if (!pending.length){
-      container.innerHTML = '<div class="empty-note">Tidak ada PKB berstatus Belum Direspon pada rentang tanggal ini.</div>';
-      document.getElementById('filterSaBelumRespon').innerHTML = '<option value="">Semua SA</option>';
-      return;
-    }
-
-    var g = groupBySA(pending);
-
-    // Dropdown filter SA — opsinya selalu mengikuti daftar SA yang ada di rentang tanggal terpilih saat ini.
-    // Kalau SA yang sedang dipilih sudah tidak ada lagi di rentang baru (mis. ganti bulan), filter direset ke "Semua SA".
-    var saFilterEl = document.getElementById('filterSaBelumRespon');
-    var prevSaFilter = saFilterEl.value;
-    var saOpts = '<option value="">Semua SA</option>' + g.order.map(function(saName){
-      return '<option value="'+esc(saName)+'">'+esc(saName)+' ('+g.map[saName].length+')</option>';
-    }).join('');
-    saFilterEl.innerHTML = saOpts;
-    saFilterEl.value = (g.order.indexOf(prevSaFilter) !== -1) ? prevSaFilter : '';
-    var saFilter = saFilterEl.value;
-
-    var groupNames = saFilter ? [saFilter] : g.order;
-    if (!groupNames.length){
-      container.innerHTML = '<div class="empty-note">Tidak ada PKB untuk SA ini pada rentang tanggal terpilih.</div>';
-      return;
-    }
-    var html = groupNames.map(function(saName){
-      // Belum ditindaklanjuti dulu, baru yang sudah — supaya pekerjaan yang masih tersisa selalu di atas.
-      var recs = g.map[saName].slice().sort(function(x,y){
-        var xH = isHandled(x), yH = isHandled(y);
-        if (xH !== yH) return xH ? 1 : -1;
-        return y.day - x.day;
-      });
-      var remaining = recs.filter(function(r){ return !isHandled(r); }).length;
-      var rows = recs.map(renderBelumResponRow).join('');
-      return '<div class="sa-group-card">'+
-        '<div class="sa-group-head"><span class="sa-group-name">'+esc(saName)+'</span><span class="sa-group-count">'+remaining+' dari '+recs.length+' PKB belum ditindaklanjuti</span></div>'+
-        '<div class="sa-group-rows">'+rows+'</div>'+
-      '</div>';
-    }).join('');
-    container.innerHTML = html;
-    wireBelumResponEvents(container);
   }
 
   function renderHighlightTable(){
