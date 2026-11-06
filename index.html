@@ -354,8 +354,8 @@
         <table>
           <thead>
             <tr>
-              <th>Tanggal</th><th>Plat Nopol</th><th>Model</th><th>SA</th><th>Bagian</th>
-              <th>Teknisi / Foreman</th><th>Catatan Pelanggan</th><th>NPS</th>
+              <th>Tanggal</th><th>Plat Nopol</th><th>Model</th><th>SA</th><th>Nomor Telfon Lama</th>
+              <th>Nomor Telfon Baru</th><th>Catatan Pelanggan</th><th>NPS</th>
             </tr>
           </thead>
           <tbody id="tableBodyHighlight"></tbody>
@@ -379,8 +379,8 @@
         <table>
           <thead>
             <tr>
-              <th>Tanggal</th><th>No</th><th>Plat Nopol</th><th>Model</th><th>SA</th><th>Bagian</th>
-              <th>Teknisi / Foreman</th><th>Status</th><th>Catatan Pelanggan</th><th>NPS</th>
+              <th>Tanggal</th><th>No</th><th>Plat Nopol</th><th>Model</th><th>SA</th><th>Nomor Telfon Lama</th>
+              <th>Nomor Telfon Baru</th><th>Status</th><th>Catatan Pelanggan</th><th>NPS</th>
             </tr>
           </thead>
           <tbody id="tableBody"></tbody>
@@ -406,7 +406,7 @@
     <div><b>Sumber data:</b> Google Sheet PSFU (satu file per bulan, tab per tanggal di dalamnya) — <a id="sheetLink" href="#" target="_blank" rel="noopener">buka sheet bulan terpilih</a>. Halaman ini menggabungkan semua tab tanggal dalam rentang yang dipilih, dan memuat ulang otomatis setiap <span id="refreshSecLabel">30</span> detik langsung dari sheet, tanpa server perantara.</div>
     <div>Rentang tanggal default adalah <b>1 sampai H-4</b> (zona waktu Asia/Jakarta) karena proses follow up telepon PSFU baru selesai sekitar H+3 setelah kendaraan keluar — dengan batas akhir H-4 data yang tampil sudah lengkap/final (bukan status "Belum Direspon" yang masih berjalan). Gunakan pemilih "Dari Tanggal" / "Sampai Tanggal" di atas untuk melihat rentang lain, atau tombol "Default" untuk kembali ke rentang standar.</div>
     <div>Tab <b>"Highlight Kurang Puas"</b> hanya menampilkan pelanggan yang menyatakan kurang puas dalam rentang tanggal terpilih (ringkasan rate, breakdown komplain per bagian, dan daftar detailnya) — cocok untuk dipantau cepat. Tab <b>"Detail Semua PKB"</b> berisi seluruh data kendaraan pada rentang tersebut (semua status: Puas / Kurang Puas / Belum Direspon) untuk penelusuran lebih lanjut.</div>
-    <div>Kolom <b>Teknisi / Foreman</b> belum tersedia di sheet sumber saat ini (hanya nama SA yang tercatat), sehingga untuk komplain bagian Produksi &amp; Teknis kolom ini ditampilkan "belum tercatat". Tambahkan kolom Teknisi/Foreman di sheet jika ingin pelacakan sampai ke nama mekanik.</div>
+    <div>Kolom <b>Nomor Telfon Lama</b> diambil langsung dari kolom "No. Handphone" di sheet sumber. Kolom <b>Nomor Telfon Baru</b> hanya terisi kalau SA sudah mengganti nomor pelanggan lewat tab "Belum Direspon (per SA)" (nomor lama tidak valid/sudah berganti) — kalau belum pernah diganti, kolom ini ditampilkan "–".</div>
     <div>Klasifikasi "Bagian" untuk komplain negatif dibuat otomatis dari kata kunci pada catatan pelanggan (sheet sumber tidak selalu mengisi kategori komplain), jadi hasilnya adalah perkiraan terbaik — mohon dikoreksi manual di sheet bila diperlukan.</div>
     <div>Gunakan pemilih <b>"Bulan"</b> di atas untuk berpindah antar sheet PSFU Januari–Desember 2026 (satu file Google Sheet terpisah per bulan) — memilih bulan otomatis mengarahkan halaman ini ke sheet bulan tersebut dan menyesuaikan jumlah tanggal yang tersedia. Kalau bengkel membuat sheet untuk tahun baru, tambahkan entri baru di daftar <code>MONTH_SHEETS</code> pada kode halaman ini.</div>
     <div>Tab <b>"Belum Direspon (per SA)"</b> mengelompokkan PKB yang belum direspon berdasarkan SA, supaya SA bisa menandai sendiri hasil telepon susulan (Puas/Kurang Puas), catatan, dan nomor HP pengganti kalau nomor lama tidak valid. Perubahan di tab ini tersimpan ke Google Sheet terpisah lewat Apps Script, dan setiap layar yang membuka dashboard ini mengambil update terbaru setiap <span id="pollSecLabel">20</span> detik — jadi tidak perlu login untuk membuka dashboard ini, tapi update dari SA lain butuh beberapa detik untuk muncul (bukan instan).</div>
@@ -1349,14 +1349,15 @@
     document.getElementById('kurangCountPill').textContent = rows.length + ' dari ' + kurangTotal + ' pelanggan kurang puas';
 
     var html = rows.map(function(r){
-      var teknisi = (r.area === 'Produksi & Teknis') ? '<span class="note-muted">belum tercatat</span>' : '–';
+      var phoneOld = r.phone ? esc(r.phone) : '<span class="note-muted">–</span>';
+      var phoneNew = (r.override && r.override.newPhone) ? esc(r.override.newPhone) : '<span class="note-muted">–</span>';
       return '<tr>'+
         '<td>'+fmtDateShort(r.day)+'</td>'+
         '<td class="plate">'+esc(r.plate)+'</td>'+
         '<td>'+esc(r.model)+'</td>'+
         '<td>'+esc(r.sa)+'</td>'+
-        '<td>'+(r.area?esc(r.area):'<span class="note-muted">–</span>')+'</td>'+
-        '<td>'+teknisi+'</td>'+
+        '<td>'+phoneOld+'</td>'+
+        '<td>'+phoneNew+'</td>'+
         '<td class="verbatim">'+(r.negText?esc(r.negText):'<span class="note-muted">–</span>')+'</td>'+
         '<td class="nps">'+(r.nps!==null?r.nps:'–')+'</td>'+
       '</tr>';
@@ -1385,7 +1386,8 @@
     var html = rows.map(function(r){
       var badgeCls = r.status==='Puas' ? 'puas' : (r.status==='Kurang Puas' ? 'kurang' : 'belum');
       var note = r.negText || r.posText || (r.posCategory ? r.posCategory : '');
-      var teknisi = (r.area === 'Produksi & Teknis' && r.status === 'Kurang Puas') ? '<span class="note-muted">belum tercatat</span>' : '–';
+      var phoneOld = r.phone ? esc(r.phone) : '<span class="note-muted">–</span>';
+      var phoneNew = (r.override && r.override.newPhone) ? esc(r.override.newPhone) : '<span class="note-muted">–</span>';
       var badgeTitle = r.override ? ' title="Status diperbarui manual oleh SA lewat tab Belum Direspon"' : '';
       var badgeExtra = r.override ? ' *' : '';
       return '<tr>'+
@@ -1394,8 +1396,8 @@
         '<td class="plate">'+esc(r.plate)+'</td>'+
         '<td>'+esc(r.model)+'</td>'+
         '<td>'+esc(r.sa)+'</td>'+
-        '<td>'+(r.area?esc(r.area):'<span class="note-muted">–</span>')+'</td>'+
-        '<td>'+teknisi+'</td>'+
+        '<td>'+phoneOld+'</td>'+
+        '<td>'+phoneNew+'</td>'+
         '<td><span class="badge '+badgeCls+'"'+badgeTitle+'>'+r.status+badgeExtra+'</span></td>'+
         '<td class="verbatim">'+(note?esc(note):'<span class="note-muted">–</span>')+'</td>'+
         '<td class="nps">'+(r.nps!==null?r.nps:'–')+'</td>'+
