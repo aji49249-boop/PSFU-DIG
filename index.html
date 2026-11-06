@@ -168,19 +168,31 @@
   .subcat-detail-list{display:flex; flex-direction:column; gap:8px; max-height:420px; overflow:auto;}
   .subcat-detail-hint{font-size:12.5px; color:var(--text-muted); font-style:italic; padding:4px 2px;}
 
-  .tab-nav{display:flex; gap:4px; margin-bottom:18px; border-bottom:1px solid var(--gridline);}
+  .tab-nav{display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap;}
   .tab-btn{
-    background:transparent; border:none; color:var(--text-secondary); font-size:13.5px; font-weight:600;
-    padding:10px 16px; cursor:pointer; border-radius:10px 10px 0 0; position:relative; top:1px;
-    border:1px solid transparent;
+    background:var(--surface-2); color:var(--text-secondary); font-size:13.5px; font-weight:600;
+    padding:9px 18px; cursor:pointer; border-radius:999px; border:1px solid transparent;
+    transition:background .15s ease, color .15s ease, box-shadow .15s ease;
   }
-  .tab-btn:hover{color:var(--text-primary);}
-  .tab-btn.active{
-    color:var(--text-primary); background:var(--surface-1);
-    border:1px solid var(--gridline); border-bottom-color:var(--surface-1);
-  }
+  .tab-btn:hover:not(.active){color:var(--text-primary); background:var(--gridline);}
+  .tab-btn.active{color:#fff; box-shadow:0 3px 10px rgba(20,20,20,0.16);}
   .tab-panel{display:none;}
   .tab-panel.active{display:block;}
+
+  /* Tiap tab diberi warna sendiri (bukan cuma yang aktif) supaya ketiganya langsung
+     kelihatan beda satu sama lain sekilas — merah untuk Kurang Puas, biru untuk Detail
+     (data utama), ungu untuk Belum Direspon (sumbernya beda, sheet terpisah). */
+  .tab-btn-hi{color:color-mix(in srgb, var(--critical) 78%, var(--text-secondary));}
+  .tab-btn-hi:hover:not(.active){color:var(--critical); background:color-mix(in srgb, var(--critical) 14%, var(--surface-2));}
+  .tab-btn-hi.active{background:var(--critical); box-shadow:0 3px 10px color-mix(in srgb, var(--critical) 40%, transparent);}
+
+  .tab-btn-detail{color:color-mix(in srgb, var(--accent-1) 78%, var(--text-secondary));}
+  .tab-btn-detail:hover:not(.active){color:var(--accent-1); background:color-mix(in srgb, var(--accent-1) 14%, var(--surface-2));}
+  .tab-btn-detail.active{background:var(--accent-1); box-shadow:0 3px 10px color-mix(in srgb, var(--accent-1) 40%, transparent);}
+
+  .tab-btn-alt{color:color-mix(in srgb, var(--accent-2) 78%, var(--text-secondary));}
+  .tab-btn-alt:hover:not(.active){color:var(--accent-2); background:color-mix(in srgb, var(--accent-2) 14%, var(--surface-2));}
+  .tab-btn-alt.active{background:var(--accent-2); box-shadow:0 3px 10px color-mix(in srgb, var(--accent-2) 40%, transparent);}
 
   h2.section-title{font-size:15px; margin:26px 0 10px; color:var(--text-primary); display:flex; align-items:center; gap:8px;}
   h2.section-title .count-pill{
@@ -304,9 +316,9 @@
 
   <div id="content" style="display:none;">
     <div class="tab-nav">
-      <button class="tab-btn active" id="tabBtnHighlight" data-tab="panelHighlight">Highlight Kurang Puas</button>
-      <button class="tab-btn" id="tabBtnDetail" data-tab="panelDetail">Detail Semua PKB</button>
-      <button class="tab-btn" id="tabBtnBelumRespon" data-tab="panelBelumRespon">Belum Direspon (per SA)</button>
+      <button class="tab-btn tab-btn-hi active" id="tabBtnHighlight" data-tab="panelHighlight">Highlight Kurang Puas</button>
+      <button class="tab-btn tab-btn-detail" id="tabBtnDetail" data-tab="panelDetail">Detail Semua PKB</button>
+      <button class="tab-btn tab-btn-alt" id="tabBtnBelumRespon" data-tab="panelBelumRespon">Belum Direspon (per SA)</button>
     </div>
 
     <div class="kpi-row" id="kpiRow"></div>
