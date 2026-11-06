@@ -1087,15 +1087,15 @@
     var phoneUpdated = ov.phoneUpdated || 'belum';
     var savedNote = ov.updatedAt ? '<span class="br-saved">Tersimpan · '+esc(fmtTimeShort(ov.updatedAt))+'</span>' : '';
     var radioName = 'phoneUpdated_' + esc(key);
-    var handled = isHandled(rec);
-    var statusBadge = '<span class="br-status-badge '+(handled?'done':'pending')+'">'+(handled?'Sudah Ditindaklanjuti':'Menunggu')+'</span>';
+    // Catatan: badge "Sudah Ditindaklanjuti"/"Menunggu" per baris dihapus — sejak perubahan ini, kartu
+    // yang sudah dapat feedback langsung hilang dari daftar (lihat renderBelumResponTab), jadi SEMUA
+    // kartu yang tampil di sini pasti masih "Menunggu"; badge-nya jadi tidak perlu lagi.
     return '<div class="br-row" data-key="'+esc(key)+'">'+
       '<div class="br-row-head">'+
         '<span class="br-tag">'+fmtDateShort(rec.day)+'</span>'+
         '<span class="plate">'+esc(rec.plate)+'</span>'+
         '<span class="br-model">'+esc(rec.model)+'</span>'+
         (rec.phone ? '<span class="br-phone-sheet">📞 '+esc(rec.phone)+'</span>' : '')+
-        statusBadge+
       '</div>'+
       '<div class="br-fields">'+
         '<label class="br-field"><span>Status hasil telepon</span>'+
@@ -1294,13 +1294,21 @@
       }
 
       BELUM_RESPON_REC_MAP = {};
-      if (!pending.length){
-        container.innerHTML = '<div class="empty-note">Tidak ada PKB berstatus Belum Direspon pada rentang tanggal ini.</div>';
+      // Daftar kartu di bawah ini (beda dari "Monitoring Progress per SA" di atas, yang sengaja TETAP
+      // menghitung semua PKB termasuk yang sudah dapat feedback) HANYA berisi PKB yang masih aktif —
+      // begitu SA mengisi hasil telepon (Puas/Kurang Puas) dan klik Simpan, kartunya langsung hilang
+      // dari daftar ini supaya SA cuma lihat pekerjaan yang betul-betul masih harus ditindaklanjuti.
+      // Kalau SA membatalkan editnya balik ke "Belum Direspon", kartunya otomatis muncul lagi di sini.
+      var activePending = pending.filter(function(r){ return !isHandled(r); });
+      if (!activePending.length){
+        container.innerHTML = '<div class="empty-note">' +
+          (pending.length ? 'Semua PKB Belum Direspon pada rentang ini sudah dapat feedback dari SA.' : 'Tidak ada PKB berstatus Belum Direspon pada rentang tanggal ini.') +
+          '</div>';
         document.getElementById('filterSaBelumRespon').innerHTML = '<option value="">Semua SA</option>';
         return;
       }
 
-      var g = groupBySA(pending);
+      var g = groupBySA(activePending);
 
       // Dropdown filter SA — opsinya selalu mengikuti daftar SA yang ada di rentang tanggal terpilih saat ini.
       // Kalau SA yang sedang dipilih sudah tidak ada lagi di rentang baru (mis. ganti bulan), filter direset ke "Semua SA".
@@ -1319,16 +1327,10 @@
         return;
       }
       var html = groupNames.map(function(saName){
-        // Belum ditindaklanjuti dulu, baru yang sudah — supaya pekerjaan yang masih tersisa selalu di atas.
-        var recs = g.map[saName].slice().sort(function(x,y){
-          var xH = isHandled(x), yH = isHandled(y);
-          if (xH !== yH) return xH ? 1 : -1;
-          return y.day - x.day;
-        });
-        var remaining = recs.filter(function(r){ return !isHandled(r); }).length;
+        var recs = g.map[saName].slice().sort(function(x,y){ return y.day - x.day; });
         var rows = recs.map(renderBelumResponRow).join('');
         return '<div class="sa-group-card">'+
-          '<div class="sa-group-head"><span class="sa-group-name">'+esc(saName)+'</span><span class="sa-group-count">'+remaining+' dari '+recs.length+' PKB belum ditindaklanjuti</span></div>'+
+          '<div class="sa-group-head"><span class="sa-group-name">'+esc(saName)+'</span><span class="sa-group-count">'+recs.length+' PKB belum ditindaklanjuti</span></div>'+
           '<div class="sa-group-rows">'+rows+'</div>'+
         '</div>';
       }).join('');
