@@ -270,6 +270,11 @@
   .br-status-badge{font-size:10px; font-weight:700; padding:2px 8px; border-radius:999px; text-transform:uppercase; letter-spacing:.03em; margin-left:auto;}
   .br-status-badge.done{background:color-mix(in srgb, var(--good) 16%, var(--surface-1)); color:var(--good-text);}
   .br-status-badge.pending{background:color-mix(in srgb, var(--warning) 16%, var(--surface-1)); color:var(--warning);}
+  /* Keterangan "Nomor Tidak Aktif" (dari Status Call = "No Valid" di sheet) vs "Belum Diangkat"
+     (sisanya) di setiap kartu PKB tab "Belum Direspon (per SA)" — lihat renderBelumResponRow(). */
+  .br-call-tag{font-size:10px; font-weight:700; padding:2px 8px; border-radius:999px; text-transform:uppercase; letter-spacing:.03em; margin-left:auto;}
+  .br-call-tag.invalid{background:color-mix(in srgb, var(--critical) 14%, var(--surface-1)); color:var(--critical);}
+  .br-call-tag.pending{background:color-mix(in srgb, var(--warning) 16%, var(--surface-1)); color:var(--warning);}
   .br-fields{display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px;}
   .br-field{display:flex; flex-direction:column; gap:4px; font-size:11.5px; color:var(--text-secondary);}
   .br-field-wide{grid-column:1 / -1;}
@@ -715,7 +720,14 @@
     var contacted = records.filter(function(r){return r.statusCall!=='';}).length; // any call attempt logged (Contacted/Connected/No Valid)
     var puas = records.filter(function(r){return r.status==='Puas';}).length;
     var kurang = records.filter(function(r){return r.status==='Kurang Puas';}).length;
-    var belumRespon = records.filter(function(r){return r.status==='Belum Direspon';}).length;
+    var belumResponRecs = records.filter(function(r){return r.status==='Belum Direspon';});
+    var belumRespon = belumResponRecs.length;
+    // "No Valid" di kolom Status Call sheet = nomor HP pelanggan tidak nyambung/tidak aktif (SA sudah
+    // coba telepon tapi nomornya memang bermasalah) — beda dari sisanya (kosong/Connected/By WATI) yang
+    // artinya PKB itu memang belum sempat/belum diangkat teleponnya sama sekali. Dipecah di KPI supaya
+    // Pak Dimas bisa lihat langsung mana yang butuh update nomor dulu vs mana yang tinggal ditelpon ulang.
+    var tidakAktif = belumResponRecs.filter(function(r){return r.statusCall==='No Valid';}).length;
+    var belumDiangkat = belumRespon - tidakAktif;
     var npsVals = records.map(function(r){return r.nps;}).filter(function(n){return n!==null;});
     var avgNps = npsVals.length ? (npsVals.reduce(function(a,b){return a+b;},0)/npsVals.length) : null;
     var callRate = total ? Math.round((contacted/total)*100) : 0;
@@ -728,7 +740,8 @@
       {label:"Rata-rata NPS", value: avgNps!==null ? avgNps.toFixed(1) : "–", sub: npsVals.length + " responden memberi skor"},
       {label:"Apresiasi (Puas)", value: puas, sub: respondedTotal ? Math.round((puas/respondedTotal)*100)+"% dari yang sudah selesai ditelepon" : "belum ada respon", cls:"good"},
       {label:"Komplain (Kurang Puas)", value: kurang, sub: respondedTotal ? Math.round((kurang/respondedTotal)*100)+"% dari yang sudah selesai ditelepon" : "belum ada respon", cls: kurang>0 ? "bad" : ""},
-      {label:"Belum Direspon", value: belumRespon, sub: total ? Math.round((belumRespon/total)*100)+"% dari total PKB belum ditelepon/direspon" : "tidak ada data", cls: belumRespon>0 ? "warn" : ""},
+      {label:"Nomor Tidak Aktif", value: tidakAktif, sub: total ? Math.round((tidakAktif/total)*100)+"% dari total PKB — nomor HP tidak nyambung/tidak aktif" : "tidak ada data", cls: tidakAktif>0 ? "warn" : ""},
+      {label:"Belum Diangkat/Direspon", value: belumDiangkat, sub: total ? Math.round((belumDiangkat/total)*100)+"% dari total PKB — belum sempat/tidak diangkat teleponnya" : "tidak ada data", cls: belumDiangkat>0 ? "warn" : ""},
     ];
     var html = tiles.map(function(t){
       return '<div class="stat-tile '+(t.cls||'')+'"><div class="label">'+t.label+'</div><div class="value">'+t.value+'</div><div class="sub">'+t.sub+'</div></div>';
@@ -1090,12 +1103,19 @@
     // Catatan: badge "Sudah Ditindaklanjuti"/"Menunggu" per baris dihapus — sejak perubahan ini, kartu
     // yang sudah dapat feedback langsung hilang dari daftar (lihat renderBelumResponTab), jadi SEMUA
     // kartu yang tampil di sini pasti masih "Menunggu"; badge-nya jadi tidak perlu lagi.
+    // Keterangan "Nomor Tidak Aktif" vs "Belum Diangkat" — dari kolom Status Call di sheet sumber
+    // (rawStatusCall === 'No Valid' berarti nomornya tidak nyambung/tidak aktif; selain itu — kosong/
+    // Connected/By WATI — berarti PKB-nya memang belum sempat/belum diangkat teleponnya).
+    var callTag = rec.rawStatusCall === 'No Valid'
+      ? '<span class="br-call-tag invalid">Nomor Tidak Aktif</span>'
+      : '<span class="br-call-tag pending">Belum Diangkat</span>';
     return '<div class="br-row" data-key="'+esc(key)+'">'+
       '<div class="br-row-head">'+
         '<span class="br-tag">'+fmtDateShort(rec.day)+'</span>'+
         '<span class="plate">'+esc(rec.plate)+'</span>'+
         '<span class="br-model">'+esc(rec.model)+'</span>'+
         (rec.phone ? '<span class="br-phone-sheet">📞 '+esc(rec.phone)+'</span>' : '')+
+        callTag+
       '</div>'+
       '<div class="br-fields">'+
         '<label class="br-field"><span>Status hasil telepon</span>'+
