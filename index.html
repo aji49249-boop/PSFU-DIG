@@ -275,6 +275,8 @@
   .br-call-tag{font-size:10px; font-weight:700; padding:2px 8px; border-radius:999px; text-transform:uppercase; letter-spacing:.03em; margin-left:auto;}
   .br-call-tag.invalid{background:color-mix(in srgb, var(--critical) 14%, var(--surface-1)); color:var(--critical);}
   .br-call-tag.pending{background:color-mix(in srgb, var(--warning) 16%, var(--surface-1)); color:var(--warning);}
+  .br-writeback-ok{font-size:11.5px; color:var(--good-text); margin-right:10px;}
+  .br-writeback-warn{font-size:11.5px; color:var(--critical); margin-right:10px;}
   .br-fields{display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px;}
   .br-field{display:flex; flex-direction:column; gap:4px; font-size:11.5px; color:var(--text-secondary);}
   .br-field-wide{grid-column:1 / -1;}
@@ -1097,9 +1099,7 @@
     var status = ov.status || 'Belum Direspon';
     var note = ov.note || '';
     var phone = ov.newPhone || '';
-    var phoneUpdated = ov.phoneUpdated || 'belum';
     var savedNote = ov.updatedAt ? '<span class="br-saved">Tersimpan · '+esc(fmtTimeShort(ov.updatedAt))+'</span>' : '';
-    var radioName = 'phoneUpdated_' + esc(key);
     // Catatan: badge "Sudah Ditindaklanjuti"/"Menunggu" per baris dihapus — sejak perubahan ini, kartu
     // yang sudah dapat feedback langsung hilang dari daftar (lihat renderBelumResponTab), jadi SEMUA
     // kartu yang tampil di sini pasti masih "Menunggu"; badge-nya jadi tidak perlu lagi.
@@ -1109,6 +1109,17 @@
     var callTag = rec.rawStatusCall === 'No Valid'
       ? '<span class="br-call-tag invalid">Nomor Tidak Aktif</span>'
       : '<span class="br-call-tag pending">Belum Diangkat</span>';
+    // Status tulis-balik otomatis ke sheet PSFU bulanan asli (lihat apps-script-backend.gs,
+    // perubahan 21 November 2026) — dikirim balik oleh server lewat field writeBackOk/writeBackError
+    // pada tiap record, jadi SA langsung tahu kalau sampai gagal, bukan dikira sudah masuk padahal belum.
+    var writeBackNote = '';
+    if (ov.updatedAt){
+      if (ov.writeBackOk === true){
+        writeBackNote = '<span class="br-writeback-ok">✓ Sudah ditulis ke spreadsheet asli</span>';
+      } else if (ov.writeBackOk === false){
+        writeBackNote = '<span class="br-writeback-warn">⚠ Belum tertulis ke spreadsheet asli'+(ov.writeBackError ? ' ('+esc(ov.writeBackError)+')' : '')+' — coba Simpan lagi</span>';
+      }
+    }
     return '<div class="br-row" data-key="'+esc(key)+'">'+
       '<div class="br-row-head">'+
         '<span class="br-tag">'+fmtDateShort(rec.day)+'</span>'+
@@ -1131,14 +1142,8 @@
         '<label class="br-field"><span>Nomor HP Baru</span>'+
           '<input type="text" class="br-phone" value="'+esc(phone)+'" placeholder="kalau nomor lama tidak valid/sudah ganti">'+
         '</label>'+
-        '<label class="br-field"><span>Nomor baru sudah diupdate ke sistem?</span>'+
-          '<span class="br-radio-group">'+
-            '<label><input type="radio" name="'+radioName+'" class="br-phone-updated" value="sudah"'+(phoneUpdated==='sudah'?' checked':'')+'> Sudah</label>'+
-            '<label><input type="radio" name="'+radioName+'" class="br-phone-updated" value="belum"'+(phoneUpdated==='belum'?' checked':'')+'> Belum</label>'+
-          '</span>'+
-        '</label>'+
       '</div>'+
-      '<div class="br-row-foot">'+savedNote+'<button type="button" class="br-save-btn primary">Simpan</button><span class="br-save-status"></span></div>'+
+      '<div class="br-row-foot">'+savedNote+writeBackNote+'<button type="button" class="br-save-btn primary">Simpan</button><span class="br-save-status"></span></div>'+
     '</div>';
   }
 
@@ -1170,7 +1175,6 @@
       var statusEl = rowEl.querySelector('.br-status');
       var noteEl = rowEl.querySelector('.br-note');
       var phoneEl = rowEl.querySelector('.br-phone');
-      var phoneUpdatedEl = rowEl.querySelector('.br-phone-updated:checked');
       var body = {
         key: key,
         month: monthKey(),
@@ -1181,11 +1185,10 @@
         status: statusEl.value,
         note: norm(noteEl.value),
         newPhone: norm(phoneEl.value),
-        phoneUpdated: phoneUpdatedEl ? phoneUpdatedEl.value : 'belum',
         updatedAt: new Date().toISOString()
       };
       if (btnEl) btnEl.disabled = true;
-      if (sEl) sEl.textContent = 'Menyimpan…';
+      if (sEl) sEl.textContent = 'Menyimpan & menulis ke spreadsheet…';
       // text/plain avoids a CORS preflight (OPTIONS) request, which an Apps Script Web App cannot answer —
       // see the project notes / Apps Script source comments for why this content-type is required here.
       fetch(OVERRIDES_API_URL, {
@@ -1194,10 +1197,19 @@
         body: JSON.stringify(body)
       }).then(function(r){ return r.json(); }).then(function(json){
         if (!json || !json.ok) throw new Error((json && json.error) || 'unknown error');
-        if (sEl) sEl.textContent = 'Tersimpan ✓';
+        // writeBack mencerminkan apakah tulis-balik OTOMATIS ke sheet PSFU bulanan asli berhasil
+        // (lihat apps-script-backend.gs) — catatan SA SENDIRI selalu tersimpan aman di dashboard
+        // apapun hasilnya, tapi kalau writeBack gagal, tampilkan peringatan yang TIDAK auto-hilang
+        // supaya SA sadar perlu coba simpan ulang, bukan mengira datanya sudah "balance" padahal belum.
+        var wb = json.writeBack || { ok: false, error: 'tidak ada info dari server' };
         if (btnEl) btnEl.disabled = false;
-        setTimeout(function(){ if (sEl) sEl.textContent = ''; }, 4000);
-        DB_OVERRIDES[key] = body; // reflect immediately on this screen; pollOverrides() reconciles with the server shortly after
+        if (wb.ok){
+          if (sEl) sEl.textContent = 'Tersimpan & sudah ditulis ke spreadsheet asli ✓';
+          setTimeout(function(){ if (sEl) sEl.textContent = ''; }, 5000);
+        } else {
+          if (sEl) sEl.textContent = 'Tersimpan di dashboard, TAPI GAGAL ditulis ke spreadsheet asli (' + (wb.error || 'tidak diketahui') + ') — coba Simpan lagi';
+        }
+        DB_OVERRIDES[key] = Object.assign({}, body, { writeBackOk: wb.ok, writeBackError: wb.error || '' }); // reflect immediately; pollOverrides() reconciles with the server shortly after
         renderAll();
         pollOverrides();
       }).catch(function(e){
