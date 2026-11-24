@@ -288,6 +288,9 @@
   .br-radio-group label{display:flex; align-items:center; gap:4px; cursor:pointer; font-weight:400;}
   .br-row-foot{display:flex; justify-content:flex-end; align-items:center; gap:10px; margin-top:8px; font-size:11px; color:var(--text-muted); min-height:14px;}
   .br-save-btn{font-size:12.5px; padding:6px 16px;}
+  .resync-row{display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:10px 0 2px;}
+  .resync-row .br-save-btn{font-size:12.5px; padding:7px 14px;}
+  .resync-status{font-size:12px; color:var(--text-muted);}
   .br-saved{color:var(--good-text);}
   .br-save-status{font-style:italic;}
 
@@ -409,8 +412,12 @@
 
     <div class="tab-panel" id="panelBelumRespon">
       <h2 class="section-title" style="margin-top:6px;">Belum Direspon — dikembalikan ke SA masing-masing <span class="count-pill" id="belumResponCountPill"></span></h2>
-      <div class="subcat-card-sub">PKB yang statusnya masih "Belum Direspon" pada rentang terpilih, dikelompokkan per SA supaya mudah ditindaklanjuti. Update status/catatan/nomor HP di sini otomatis tersinkron ke semua layar yang membuka dashboard ini (termasuk tile KPI &amp; tabel di tab lain).</div>
+      <div class="subcat-card-sub">PKB yang statusnya masih "Belum Direspon" pada rentang terpilih, dikelompokkan per SA supaya mudah ditindaklanjuti. Update status/catatan/nomor HP di sini otomatis tersinkron ke semua layar yang membuka dashboard ini (termasuk tile KPI &amp; tabel di tab lain) DAN (sejak 21 November 2026) otomatis ditulis balik ke spreadsheet PSFU bulanan aslinya.</div>
       <div class="banner warn" id="belumResponDbBanner" style="display:none;"></div>
+      <div class="resync-row" id="resyncRow" style="display:none;">
+        <button type="button" id="btnResyncOverrides" class="br-save-btn primary">Sinkronkan ulang semua follow-up ke spreadsheet</button>
+        <span id="resyncStatus" class="resync-status"></span>
+      </div>
       <h2 class="section-title" style="margin-top:6px;">Monitoring Progress per SA <span class="count-pill" id="monitorSaPill"></span></h2>
       <div class="monitor-sa-grid" id="monitorSaGrid"></div>
       <h2 class="section-title">Daftar PKB Belum Direspon</h2>
@@ -1224,6 +1231,74 @@
     }
   }
 
+  // Lihat komentar di renderBelumResponTab() soal kenapa tombol ini perlu ada: mem-POST ulang SEMUA
+  // entri DB_OVERRIDES bulan berjalan (apa adanya) ke Apps Script satu per satu (sengaja BERURUTAN,
+  // bukan sekaligus/paralel, supaya tidak membanjiri satu eksekusi Apps Script yang memang hanya bisa
+  // menangani satu permintaan dalam satu waktu untuk spreadsheet yang sama) sehingga writeBackToSourceSheet_
+  // dipicu untuk tiap PKB, termasuk yang kartunya sudah tidak tampil lagi di daftar "Belum Direspon".
+  function resyncAllOverrides(){
+    var statusEl = document.getElementById('resyncStatus');
+    var btnEl = document.getElementById('btnResyncOverrides');
+    if (!apiReady){
+      if (statusEl) statusEl.textContent = 'Tidak bisa jalan — OVERRIDES_API_URL belum di-setup.';
+      return;
+    }
+    var keys = Object.keys(DB_OVERRIDES);
+    if (!keys.length){
+      if (statusEl) statusEl.textContent = 'Belum ada catatan follow-up tersimpan untuk bulan ini.';
+      return;
+    }
+    if (btnEl) btnEl.disabled = true;
+    var okCount = 0, failCount = 0, idx = 0;
+    function next(){
+      if (idx >= keys.length){
+        if (btnEl) btnEl.disabled = false;
+        if (statusEl){
+          statusEl.textContent = 'Selesai: ' + okCount + ' dari ' + keys.length + ' berhasil ditulis ke spreadsheet' +
+            (failCount ? (', ' + failCount + ' gagal — lihat Console (F12) untuk detail, coba klik lagi.') : '.');
+        }
+        pollOverrides();
+        renderAll();
+        return;
+      }
+      var key = keys[idx];
+      var rec = DB_OVERRIDES[key] || {};
+      idx++;
+      if (statusEl) statusEl.textContent = 'Menyinkronkan ' + idx + ' dari ' + keys.length + '…';
+      var body = {
+        key: key,
+        month: rec.month || monthKey(),
+        day: rec.day,
+        no: rec.no,
+        plate: rec.plate,
+        sa: rec.sa,
+        status: rec.status,
+        note: rec.note || '',
+        newPhone: rec.newPhone || '',
+        updatedAt: new Date().toISOString()
+      };
+      fetch(OVERRIDES_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(body)
+      }).then(function(r){ return r.json(); }).then(function(json){
+        var wb = json && json.writeBack;
+        if (json && json.ok && wb && wb.ok){
+          okCount++;
+        } else {
+          failCount++;
+          console.error('[PSFU] Resync gagal untuk ' + key + ':', (json && json.error) || (wb && wb.error) || 'unknown');
+        }
+        next();
+      }).catch(function(e){
+        failCount++;
+        console.error('[PSFU] Resync error jaringan untuk ' + key + ':', e);
+        next();
+      });
+    }
+    next();
+  }
+
   function wireBelumResponEvents(container){
     var rows = container.querySelectorAll('.br-row');
     for (var i=0;i<rows.length;i++){
@@ -1306,6 +1381,17 @@
       } else {
         dbBanner.style.display = 'none';
       }
+
+      // Tombol "Sinkronkan ulang" ini KHUSUS untuk PKB yang catatannya sudah pernah disimpan SEBELUM
+      // fitur tulis-balik-ke-spreadsheet ini ada (atau yang redeploy Apps Script-nya menyusul setelah
+      // catatan itu tersimpan) — PKB seperti itu sudah berstatus bukan "Belum Direspon" lagi, sehingga
+      // (sesuai perilaku yang memang disengaja di atas) kartunya TIDAK muncul lagi di daftar di bawah
+      // dan SA/Dimas tidak akan pernah bisa klik "Simpan" ulang untuk memicu tulis-balik itu secara
+      // normal. Tombol ini mem-bypass itu dengan mem-POST ulang SEMUA data override bulan ini (apa
+      // adanya, tanpa mengubah isinya) ke Apps Script, supaya tulis-balik ke spreadsheet tetap terjadi
+      // untuk riwayat yang sudah ada, satu kali saja kalau perlu.
+      var resyncRow = document.getElementById('resyncRow');
+      if (resyncRow) resyncRow.style.display = (apiReady && Object.keys(DB_OVERRIDES).length > 0) ? 'flex' : 'none';
 
       renderSaMonitor(pending);
 
@@ -1663,6 +1749,7 @@
     document.getElementById('tabBtnDetail').addEventListener('click', function(){ switchTab('panelDetail'); });
     document.getElementById('tabBtnBelumRespon').addEventListener('click', function(){ switchTab('panelBelumRespon'); });
     document.getElementById('filterSaBelumRespon').addEventListener('change', renderBelumResponTab);
+    document.getElementById('btnResyncOverrides').addEventListener('click', resyncAllOverrides);
 
     document.getElementById('searchBoxHi').addEventListener('input', renderHighlightTable);
     document.getElementById('filterAreaHi').addEventListener('change', renderHighlightTable);
