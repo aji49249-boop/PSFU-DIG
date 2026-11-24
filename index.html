@@ -1044,7 +1044,16 @@
   // ever compounding on a previous override.
   function applyOverridesToRecords(records){
     records.forEach(function(rec){
-      var ov = (rec.rawStatus === 'Belum Direspon') ? DB_OVERRIDES[recordKey(rec)] : null;
+      // 🆕 (24 November 2026) SEBELUMNYA baris ini hanya mencari override kalau rec.rawStatus MASIH
+      // "Belum Direspon" — itu salah sejak tulis-balik otomatis ke spreadsheet asli ada (21 November
+      // 2026): begitu tulis-balik berhasil, "Status Call" di sheet ASLI berubah jadi "Contacted",
+      // sehingga rawStatus PKB itu sendiri otomatis tidak lagi "Belum Direspon" pada refresh
+      // berikutnya — dan override-nya jadi tidak pernah ketemu lagi di sini, membuat PKB itu terlihat
+      // seolah-olah "belum pernah ditindaklanjuti SA manapun" padahal sebenarnya SUDAH (lihat juga
+      // perubahan definisi `pending` di renderBelumResponTab yang bergantung pada rec.override tetap
+      // terisi walau rawStatus sudah berubah). Override harus tetap dicari TANPA syarat rawStatus di
+      // sini supaya status hasil follow-up SA tidak pernah "hilang" lagi dari tampilan manapun.
+      var ov = DB_OVERRIDES[recordKey(rec)];
       rec.override = ov || null;
       if (ov && ov.status && ov.status !== 'Belum Direspon'){
         rec.status = ov.status;
@@ -1355,7 +1364,16 @@
     // dilaporkan). Dengan try/catch ini, kejadian seperti itu akan selalu tampil sebagai pesan error
     // yang jelas di layar + log detail di Console, bukan diam-diam membuat seluruh tab tidak berfungsi.
     try {
-      var pending = RANGE_RECORDS.filter(function(r){ return r.rawStatus === 'Belum Direspon'; });
+      // 🆕 (24 November 2026) SEBELUMNYA hanya r.rawStatus==='Belum Direspon' — sekarang ditambah
+      // "ATAU sudah punya override" supaya PKB yang SUDAH ditindaklanjuti SA via dashboard lalu
+      // berhasil tulis-balik (sehingga rawStatus-nya otomatis berubah dari "Belum Direspon") TETAP
+      // terhitung di "Monitoring Progress per SA" sebagai "sudah ditindaklanjuti" — bukan malah hilang
+      // sama sekali dari hitungan (itu sebabnya progress sempat selalu terlihat 0%/reset: begitu
+      // tulis-balik berhasil, PKB-nya langsung keluar dari daftar ini dan "progress"-nya ikut hilang,
+      // bukan berpindah ke kolom "sudah"). Daftar kartu yang bisa diedit di bawah tetap hanya
+      // menampilkan yang BELUM ditindaklanjuti lewat activePending (lihat di bawah) — perubahan ini
+      // HANYA memperluas cakupan untuk keperluan hitungan Monitoring & pill judul di atas.
+      var pending = RANGE_RECORDS.filter(function(r){ return r.rawStatus === 'Belum Direspon' || !!r.override; });
       var stillPending = pending.filter(function(r){ return !isHandled(r); }).length;
       document.getElementById('belumResponCountPill').textContent =
         stillPending + ' dari ' + pending.length + ' PKB masih perlu ditindaklanjuti';
