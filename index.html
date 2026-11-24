@@ -1231,11 +1231,17 @@
     }
   }
 
-  // Lihat komentar di renderBelumResponTab() soal kenapa tombol ini perlu ada: mem-POST ulang SEMUA
-  // entri DB_OVERRIDES bulan berjalan (apa adanya) ke Apps Script satu per satu (sengaja BERURUTAN,
-  // bukan sekaligus/paralel, supaya tidak membanjiri satu eksekusi Apps Script yang memang hanya bisa
-  // menangani satu permintaan dalam satu waktu untuk spreadsheet yang sama) sehingga writeBackToSourceSheet_
-  // dipicu untuk tiap PKB, termasuk yang kartunya sudah tidak tampil lagi di daftar "Belum Direspon".
+  // Lihat komentar di renderBelumResponTab() soal kenapa tombol ini perlu ada.
+  //
+  // 🆕 (24 November 2026) SENGAJA DIUBAH agar tidak lagi mem-POST ulang status/catatan/nomor HP
+  // dari data yang tersimpan di BROWSER (DB_OVERRIDES) — itu berisiko: begitu status/catatan hasil
+  // kiriman ulang dari browser BERBEDA sedikit saja dari yang sebenarnya tersimpan di server (mis.
+  // karena data di layar belum sempat di-refresh penuh), baris itu bisa ketimpa jadi salah, dan itu
+  // yang menyebabkan "Monitoring Progress per SA" sempat ter-reset ke 0% setelah tombol ini diklik.
+  // Sekarang tombol ini HANYA memanggil satu endpoint GET ke Apps Script (action=resync) yang
+  // membaca & menulis ulang status/catatan APA ADANYA langsung dari sheet "BelumResponUpdates" itu
+  // sendiri (bukan dari browser) — jadi status SA tidak mungkin lagi ketukar/ter-reset oleh tombol
+  // ini, dan hanya kolom bookkeeping tulis-balik yang diperbarui di server.
   function resyncAllOverrides(){
     var statusEl = document.getElementById('resyncStatus');
     var btnEl = document.getElementById('btnResyncOverrides');
@@ -1243,60 +1249,40 @@
       if (statusEl) statusEl.textContent = 'Tidak bisa jalan — OVERRIDES_API_URL belum di-setup.';
       return;
     }
-    var keys = Object.keys(DB_OVERRIDES);
-    if (!keys.length){
+    if (!Object.keys(DB_OVERRIDES).length){
       if (statusEl) statusEl.textContent = 'Belum ada catatan follow-up tersimpan untuk bulan ini.';
       return;
     }
     if (btnEl) btnEl.disabled = true;
-    var okCount = 0, failCount = 0, idx = 0;
-    function next(){
-      if (idx >= keys.length){
-        if (btnEl) btnEl.disabled = false;
-        if (statusEl){
-          statusEl.textContent = 'Selesai: ' + okCount + ' dari ' + keys.length + ' berhasil ditulis ke spreadsheet' +
-            (failCount ? (', ' + failCount + ' gagal — lihat Console (F12) untuk detail, coba klik lagi.') : '.');
-        }
-        pollOverrides();
-        renderAll();
+    if (statusEl) statusEl.textContent = 'Menyinkronkan…';
+    var url = OVERRIDES_API_URL + '?month=' + encodeURIComponent(monthKey()) + '&action=resync&_ts=' + Date.now();
+    fetch(url).then(function(r){ return r.json(); }).then(function(json){
+      if (btnEl) btnEl.disabled = false;
+      if (!json || !json.ok){
+        if (statusEl) statusEl.textContent = 'Gagal: ' + ((json && json.error) || 'tidak diketahui, coba lagi');
         return;
       }
-      var key = keys[idx];
-      var rec = DB_OVERRIDES[key] || {};
-      idx++;
-      if (statusEl) statusEl.textContent = 'Menyinkronkan ' + idx + ' dari ' + keys.length + '…';
-      var body = {
-        key: key,
-        month: rec.month || monthKey(),
-        day: rec.day,
-        no: rec.no,
-        plate: rec.plate,
-        sa: rec.sa,
-        status: rec.status,
-        note: rec.note || '',
-        newPhone: rec.newPhone || '',
-        updatedAt: new Date().toISOString()
-      };
-      fetch(OVERRIDES_API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(body)
-      }).then(function(r){ return r.json(); }).then(function(json){
-        var wb = json && json.writeBack;
-        if (json && json.ok && wb && wb.ok){
-          okCount++;
-        } else {
-          failCount++;
-          console.error('[PSFU] Resync gagal untuk ' + key + ':', (json && json.error) || (wb && wb.error) || 'unknown');
-        }
-        next();
-      }).catch(function(e){
-        failCount++;
-        console.error('[PSFU] Resync error jaringan untuk ' + key + ':', e);
-        next();
-      });
-    }
-    next();
+      var results = json.results || [];
+      var okCount = results.filter(function(r){ return r.ok; }).length;
+      var failCount = results.length - okCount;
+      if (statusEl){
+        statusEl.textContent = 'Selesai: ' + okCount + ' dari ' + results.length + ' berhasil ditulis ke spreadsheet' +
+          (failCount ? (', ' + failCount + ' gagal — lihat Console (F12) untuk detail, coba klik lagi.') : '.');
+      }
+      if (failCount){
+        results.filter(function(r){ return !r.ok; }).forEach(function(r){
+          console.error('[PSFU] Resync gagal untuk ' + r.key + ':', r.error);
+        });
+      }
+      // Status/catatan SA sendiri TIDAK pernah ikut berubah oleh resync ini, jadi DB_OVERRIDES tidak
+      // perlu di-refresh demi kebenaran data — poll ini murni supaya badge writeBack di layar (kalau
+      // ada yang sedang tampil) ikut ter-update, bukan untuk "memperbaiki" status apapun.
+      pollOverrides();
+    }).catch(function(e){
+      if (btnEl) btnEl.disabled = false;
+      if (statusEl) statusEl.textContent = 'Gagal (jaringan): ' + (e && e.message ? e.message : 'coba lagi');
+      console.error('[PSFU] Resync error jaringan:', e);
+    });
   }
 
   function wireBelumResponEvents(container){
